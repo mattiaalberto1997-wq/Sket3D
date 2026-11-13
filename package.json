@@ -1,0 +1,15 @@
+{
+  "name": "viewer3d-skp-obj-3ds",
+  "version": "1.0.0",
+  "description": "Visualizzatore 3D Android per file SketchUp (.skp), .obj e .3ds",
+  "scripts": {
+    "build:android": "npx cap add android || true && npx cap sync android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.1.2",
+    "@capacitor/core": "^6.1.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.1.2"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "appId": "it.viewer3d.skpobj3ds",
+  "appName": "3D Viewer SKP",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": true
+  }
+}

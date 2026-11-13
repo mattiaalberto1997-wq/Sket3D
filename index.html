@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f172a" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <title>3D Viewer — SKP / OBJ / 3DS</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background-color: #0f172a;
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    #canvas-container {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 1;
+    }
+    .glass {
+      background: rgba(15, 23, 42, 0.78);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(148, 163, 184, 0.2);
+    }
+    .safe-top {
+      padding-top: max(12px, env(safe-area-inset-top));
+    }
+    .safe-bottom {
+      padding-bottom: max(14px, env(safe-area-inset-bottom));
+    }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/",
+        "openskp": "https://esm.sh/openskp@1.5.0"
+      }
+    }
+  </script>
+</head>
+<body class="text-slate-100">
+
+  <div id="canvas-container"></div>
+
+  <!-- Top Bar -->
+  <header class="fixed top-0 left-0 right-0 z-20 safe-top px-3 sm:px-5 pointer-events-none">
+    <div class="max-w-5xl mx-auto flex items-center justify-between gap-2 glass rounded-2xl px-3.5 py-2.5 shadow-xl pointer-events-auto">
+      <div class="flex items-center gap-2.5 min-w-0">
+        <div class="w-9 h-9 rounded-xl bg-sky-500/20 border border-sky-400/30 flex items-center justify-center shrink-0">
+          <svg class="w-5 h-5 text-sky-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M21 7.5l-9-5.25L3 7.5m18 0l-9 5.25m9-5.25v9l-9 5.25M3 7.5l9 5.25M3 7.5v9l9 5.25m0-9v9" />
+          </svg>
+        </div>
+        <div class="min-w-0">
+          <h1 id="model-title" class="text-sm sm:text-base font-semibold truncate text-white">Modello Demo 3D</h1>
+          <p id="model-stats" class="text-[11px] sm:text-xs text-slate-400 truncate">Supporta .SKP, .OBJ, .3DS • Touch & Tablet</p>
+        </div>
+      </div>
+
+      <label for="file-input" class="cursor-pointer shrink-0 inline-flex items-center gap-2 bg-sky-500 hover:bg-sky-400 active:scale-95 transition text-slate-950 font-semibold text-xs sm:text-sm px-3.5 py-2.5 rounded-xl shadow-lg shadow-sky-500/25">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
+        </svg>
+        <span>Apri File</span>
+      </label>
+      <!-- Nessun filtro accept restrittivo per compatibilità completa con file manager Android -->
+      <input id="file-input" type="file" class="hidden" />
+    </div>
+  </header>
+
+  <!-- Loading Overlay -->
+  <div id="loading-overlay" class="hidden fixed inset-0 z-30 bg-slate-950/75 backdrop-blur-sm flex flex-col items-center justify-center p-6">
+    <div class="w-12 h-12 border-4 border-sky-400/30 border-t-sky-400 rounded-full animate-spin mb-4"></div>
+    <p id="loading-text" class="text-base font-medium text-white text-center">Elaborazione modello 3D...</p>
+    <p class="text-xs text-slate-400 mt-1 text-center">Triangolazione e centratura automatica in corso</p>
+  </div>
+
+  <!-- Error Toast -->
+  <div id="error-toast" class="hidden fixed top-20 left-1/2 -translate-x-1/2 z-40 max-w-md w-[92%] bg-rose-950/95 border border-rose-500/50 text-rose-100 px-4 py-3 rounded-2xl shadow-2xl text-xs sm:text-sm">
+    <div class="flex items-start justify-between gap-3">
+      <span id="error-message">Errore durante il caricamento del file.</span>
+      <button id="close-error" class="text-rose-300 hover:text-white font-bold">✕</button>
+    </div>
+  </div>
+
+  <!-- Drag & Drop Overlay (utile in Split-Screen su tablet Lenovo) -->
+  <div id="drop-zone" class="hidden fixed inset-0 z-40 bg-sky-950/80 border-4 border-dashed border-sky-400 flex items-center justify-center pointer-events-none">
+    <div class="text-center p-6">
+      <p class="text-xl font-bold text-white">Rilascia qui il file 3D</p>
+      <p class="text-sm text-sky-200 mt-1">Formati supportati: .skp, .obj, .3ds</p>
+    </div>
+  </div>
+
+  <!-- Bottom Controls -->
+  <footer class="fixed bottom-0 left-0 right-0 z-20 safe-bottom px-3 sm:px-5 pointer-events-none">
+    <div class="max-w-xl mx-auto glass rounded-2xl p-2 shadow-xl pointer-events-auto grid grid-cols-4 gap-1.5 sm:gap-2">
+      <button id="btn-reset" class="flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 py-2 px-2 rounded-xl hover:bg-slate-800/80 active:scale-95 transition text-xs font-medium text-slate-200">
+        <svg class="w-4 h-4 text-sky-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 9V4.5M9 9H4.5M9 9L3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 9h4.5M15 9V4.5M15 9l5.25-5.25M15 15h4.5M15 15v4.5m0-4.5l5.25 5.25" />
+        </svg>
+        <span>Centra</span>
+      </button>
+
+      <button id="btn-wireframe" class="flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 py-2 px-2 rounded-xl hover:bg-slate-800/80 active:scale-95 transition text-xs font-medium text-slate-200">
+        <svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z" />
+        </svg>
+        <span id="lbl-wireframe">Wireframe</span>
+      </button>
+
+      <button id="btn-clay" class="flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 py-2 px-2 rounded-xl hover:bg-slate-800/80 active:scale-95 transition text-xs font-medium text-slate-200">
+        <svg class="w-4 h-4 text-amber-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4.098 19.902a3.75 3.75 0 005.304 0l6.401-6.402M6.75 21A3.75 3.75 0 013 17.25V4.125C3 3.504 3.504 3 4.125 3h5.25c.621 0 1.125.504 1.125 1.125v4.072M6.75 21a3.75 3.75 0 003.75-3.75V8.197M6.75 21h13.125c.621 0 1.125-.504 1.125-1.125v-5.25c0-.621-.504-1.125-1.125-1.125h-4.072M10.5 8.197l2.88-2.88c.438-.439 1.15-.439 1.59 0l3.712 3.713c.44.44.44 1.152 0 1.59l-2.879 2.88M6.75 17.25h.008v.008H6.75v-.008z" />
+        </svg>
+        <span id="lbl-clay">Argilla</span>
+      </button>
+
+      <button id="btn-grid" class="flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 py-2 px-2 rounded-xl hover:bg-slate-800/80 active:scale-95 transition text-xs font-medium text-slate-200">
+        <svg class="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15" />
+        </svg>
+        <span>Griglia</span>
+      </button>
+    </div>
+  </footer>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+    import { TDSLoader } from 'three/addons/loaders/TDSLoader.js';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+    import { SkpFile, toGLB } from 'openskp';
+
+    const container = document.getElementById('canvas-container');
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0f172a);
+
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.01, 1000);
+    camera.position.set(4, 3, 5);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.1;
+    container.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.07;
+    controls.screenSpacePanning = true;
+    controls.touches = {
+      ONE: THREE.TOUCH.ROTATE,
+      TWO: THREE.TOUCH.DOLLY_PAN
+    };
+
+    // Illuminazione bilanciata per modelli architettonici e meccanici
+    const hemiLight = new THREE.HemisphereLight(0xffffff, 0x334155, 1.3);
+    hemiLight.position.set(0, 20, 0);
+    scene.add(hemiLight);
+
+    const dirLight1 = new THREE.DirectionalLight(0xffffff, 1.6);
+    dirLight1.position.set(10, 18, 12);
+    scene.add(dirLight1);
+
+    const dirLight2 = new THREE.DirectionalLight(0x93c5fd, 0.7);
+    dirLight2.position.set(-12, -6, -10);
+    scene.add(dirLight2);
+
+    const gridHelper = new THREE.GridHelper(12, 24, 0x38bdf8, 0x1e293b);
+    scene.add(gridHelper);
+
+    let currentModelGroup = null;
+    let wireframeEnabled = false;
+    let clayEnabled = false;
+    const originalMaterials = new WeakMap();
+    const clayMaterial = new THREE.MeshStandardMaterial({
+      color: 0xcbd5e1,
+      roughness: 0.55,
+      metalness: 0.1,
+      side: THREE.DoubleSide
+    });
+
+    function createPlaceholder() {
+      const group = new THREE.Group();
+      group.userData.isPlaceholder = true;
+
+      const geo = new THREE.TorusKnotGeometry(0.9, 0.3, 120, 16);
+      const mat = new THREE.MeshStandardMaterial({
+        color: 0x38bdf8,
+        roughness: 0.3,
+        metalness: 0.4
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.y = 1.3;
+      group.add(mesh);
+
+      setModel(group, 'Modello Demo 3D', 'Apri un file .SKP, .OBJ o .3DS');
+    }
+
+    function countTriangles(object) {
+      let triangles = 0;
+      object.traverse((child) => {
+        if (child.isMesh && child.geometry) {
+          const geom = child.geometry;
+          if (geom.index !== null) {
+            triangles += geom.index.count / 3;
+          } else if (geom.attributes.position) {
+            triangles += geom.attributes.position.count / 3;
+          }
+        }
+      });
+      return Math.round(triangles);
+    }
+
+    function fitCameraToObject(object) {
+      const box = new THREE.Box3().setFromObject(object);
+      if (box.isEmpty()) return;
+
+      const center = box.getCenter(new THREE.Vector3());
+      const size = box.getSize(new THREE.Vector3());
+      const maxDim = Math.max(size.x, size.y, size.z) || 1;
+      const scale = 4 / maxDim;
+
+      object.scale.multiplyScalar(scale);
+      const scaledBox = new THREE.Box3().setFromObject(object);
+      const scaledCenter = scaledBox.getCenter(new THREE.Vector3());
+
+      object.position.sub(scaledCenter);
+      object.position.y += (scaledBox.max.y - scaledBox.min.y) / 2;
+
+      controls.target.set(0, (scaledBox.max.y - scaledBox.min.y) / 2, 0);
+      camera.position.set(4.5, 3.5, 5.5);
+      controls.update();
+    }
+
+    function prepareMaterials(object, useFallbackIfEmpty = false) {
+      object.traverse((child) => {
+        if (child.isMesh) {
+          if (child.geometry && !child.geometry.attributes.normal) {
+            child.geometry.computeVertexNormals();
+          }
+          if (!child.material || useFallbackIfEmpty) {
+            child.material = new THREE.MeshStandardMaterial({
+              color: 0xd1d5db,
+              roughness: 0.55,
+              metalness: 0.1,
+              side: THREE.DoubleSide
+            });
+          } else {
+            const mats = Array.isArray(child.material) ? child.material : [child.material];
+            mats.forEach((m) => { m.side = THREE.DoubleSide; });
+          }
+          originalMaterials.set(child, child.material);
+        }
+      });
+    }
+
+    function applyRenderStates() {
+      if (!currentModelGroup) return;
+      currentModelGroup.traverse((child) => {
+        if (child.isMesh) {
+          if (clayEnabled) {
+            child.material = clayMaterial;
+          } else if (originalMaterials.has(child)) {
+            child.material = originalMaterials.get(child);
+          }
+          const mats = Array.isArray(child.material) ? child.material : [child.material];
+          mats.forEach((m) => { m.wireframe = wireframeEnabled; });
+        }
+      });
+    }
+
+    function setModel(group, title, subtitle) {
+      if (currentModelGroup) {
+        scene.remove(currentModelGroup);
+      }
+      currentModelGroup = group;
+      scene.add(currentModelGroup);
+      fitCameraToObject(currentModelGroup);
+      applyRenderStates();
+
+      document.getElementById('model-title').textContent = title;
+      document.getElementById('model-stats').textContent = subtitle;
+    }
+
+    function showError(msg) {
+      const toast = document.getElementById('error-toast');
+      document.getElementById('error-message').textContent = msg;
+      toast.classList.remove('hidden');
+    }
+
+    function setLoading(active, text = 'Elaborazione modello 3D...') {
+      const overlay = document.getElementById('loading-overlay');
+      document.getElementById('loading-text').textContent = text;
+      overlay.classList.toggle('hidden', !active);
+    }
+
+    async function loadFile(file) {
+      if (!file) return;
+      const fileName = file.name;
+      const ext = fileName.split('.').pop().toLowerCase();
+
+      setLoading(true, `Caricamento ${fileName}...`);
+      document.getElementById('error-toast').classList.add('hidden');
+
+      try {
+        const buffer = await file.arrayBuffer();
+
+        if (ext === 'skp') {
+          setLoading(true, 'Decodifica geometria SketchUp (.skp)...');
+          await new Promise((r) => setTimeout(r, 30));
+          const bytes = new Uint8Array(buffer);
+          const skpDoc = typeof SkpFile.fromBytes === 'function'
+            ? SkpFile.fromBytes(bytes)
+            : SkpFile.open(bytes);
+          const builtScene = skpDoc.buildScene();
+          const glbData = toGLB(builtScene);
+          const glbBuffer = glbData.buffer
+            ? glbData.buffer.slice(glbData.byteOffset, glbData.byteOffset + glbData.byteLength)
+            : glbData;
+
+          const gltfLoader = new GLTFLoader();
+          gltfLoader.parse(glbBuffer, '', (gltf) => {
+            const root = gltf.scene;
+            // SketchUp usa asse Z verso l'alto; Three.js usa Y verso l'alto
+            root.rotation.x = -Math.PI / 2;
+            const wrapper = new THREE.Group();
+            wrapper.add(root);
+            prepareMaterials(wrapper, false);
+            const tris = countTriangles(wrapper);
+            setModel(wrapper, fileName, `SketchUp (.SKP) • ${tris.toLocaleString('it-IT')} triangoli`);
+            setLoading(false);
+          }, (err) => {
+            console.error(err);
+            setLoading(false);
+            showError('Impossibile convertire la scena SketchUp in 3D.');
+          });
+
+        } else if (ext === 'obj') {
+          const text = new TextDecoder().decode(buffer);
+          const loader = new OBJLoader();
+          const obj = loader.parse(text);
+          prepareMaterials(obj, true);
+          const tris = countTriangles(obj);
+          setModel(obj, fileName, `Wavefront (.OBJ) • ${tris.toLocaleString('it-IT')} triangoli`);
+          setLoading(false);
+
+        } else if (ext === '3ds') {
+          const loader = new TDSLoader();
+          const obj = loader.parse(buffer, '');
+          obj.rotation.x = -Math.PI / 2;
+          const wrapper = new THREE.Group();
+          wrapper.add(obj);
+          prepareMaterials(wrapper, false);
+          const tris = countTriangles(wrapper);
+          setModel(wrapper, fileName, `3D Studio (.3DS) • ${tris.toLocaleString('it-IT')} triangoli`);
+          setLoading(false);
+
+        } else {
+          setLoading(false);
+          showError(`Formato ".${ext}" non supportato. Seleziona un file .skp, .obj o .3ds.`);
+        }
+      } catch (err) {
+        console.error(err);
+        setLoading(false);
+        showError(`Errore nella lettura di "${fileName}": ${err.message || 'file danneggiato o versione non supportata'}`);
+      }
+    }
+
+    // Event Listeners UI
+    document.getElementById('file-input').addEventListener('change', (e) => {
+      const file = e.target.files?.[0];
+      if (file) loadFile(file);
+      e.target.value = '';
+    });
+
+    document.getElementById('close-error').addEventListener('click', () => {
+      document.getElementById('error-toast').classList.add('hidden');
+    });
+
+    document.getElementById('btn-reset').addEventListener('click', () => {
+      if (currentModelGroup) fitCameraToObject(currentModelGroup);
+    });
+
+    document.getElementById('btn-wireframe').addEventListener('click', () => {
+      wireframeEnabled = !wireframeEnabled;
+      document.getElementById('btn-wireframe').classList.toggle('bg-sky-500/20', wireframeEnabled);
+      applyRenderStates();
+    });
+
+    document.getElementById('btn-clay').addEventListener('click', () => {
+      clayEnabled = !clayEnabled;
+      document.getElementById('btn-clay').classList.toggle('bg-amber-500/20', clayEnabled);
+      applyRenderStates();
+    });
+
+    document.getElementById('btn-grid').addEventListener('click', () => {
+      gridHelper.visible = !gridHelper.visible;
+    });
+
+    // Drag & Drop
+    window.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      document.getElementById('drop-zone').classList.remove('hidden');
+    });
+    window.addEventListener('dragleave', (e) => {
+      if (e.relatedTarget === null) {
+        document.getElementById('drop-zone').classList.add('hidden');
+      }
+    });
+    window.addEventListener('drop', (e) => {
+      e.preventDefault();
+      document.getElementById('drop-zone').classList.add('hidden');
+      const file = e.dataTransfer?.files?.[0];
+      if (file) loadFile(file);
+    });
+
+    // Resize responsive per rotazione smartphone / tablet
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    createPlaceholder();
+
+    function animate() {
+      requestAnimationFrame(animate);
+      if (currentModelGroup && currentModelGroup.userData.isPlaceholder) {
+        currentModelGroup.rotation.y += 0.008;
+      }
+      controls.update();
+      renderer.render(scene, camera);
+    }
+    animate();
+  </script>
+</body>
+</html>
